@@ -25,117 +25,146 @@ var (
 	Stderr = os.Stderr
 )
 
-var Environ = make(map[string]string, 1)
-
-func Set(key, value string) {
-	Environ[key] = value
-}
-func Delete(key string) {
-	delete(Environ, key)
-}
-
 type NopReadCloser struct{ io.Reader }
 type NopWriteCloser struct{ io.Writer }
 
 func (r NopReadCloser) Close() error  { return nil }
 func (r NopWriteCloser) Close() error { return nil }
 
-func command(name string, args ...string) *exec.Cmd {
-	cmd := exec.Command(name, args...)
-	cmd.Stdin = Stdin
-	cmd.Stdout = NopWriteCloser{Stdout}
-	cmd.Stderr = NopWriteCloser{Stderr}
-	cmd.Env = append(make([]string, 0), os.Environ()...)
-	for k, v := range Environ {
-		cmd.Env = append(cmd.Env, k+"="+v)
+func Run(path string, args ...string) error {
+	return Cmd(path, args...).Run()
+}
+
+type Command struct {
+	Path string
+	Args []string
+}
+
+func (cmd *Command) Start() <-chan error {
+	ch := make(chan error, 1)
+	_cmd := cmd.Cmd()
+	err := _cmd.Start()
+	if err != nil {
+		ch <- err
+		return ch
 	}
-	return cmd
+	go func() {
+		ch <- _cmd.Wait()
+		close(ch)
+	}()
+	return ch
 }
-
-func Shell(name string, args ...string) error {
-	return command(name, args...).Run()
+func (cmd *Command) Run() error {
+	return <-cmd.Start()
 }
-
-type PipeCommand struct {
-	name string
-	args []string
+func (cmd *Command) Cmd() *exec.Cmd {
+	_cmd := exec.Command(cmd.Path, cmd.Args...)
+	_cmd.Stdin = Stdin
+	_cmd.Stdout = NopWriteCloser{Stdout}
+	_cmd.Stderr = NopWriteCloser{Stderr}
+	_cmd.Env = os.Environ()
+	return _cmd
 }
-
-func P(name string, args ...string) PipeCommand {
-	return PipeCommand{name, args}
+func Cmd(path string, args ...string) *Command {
+	return &Command{path, args}
 }
-
-type pipeStatus struct {
-	index int
-	cmd   *exec.Cmd
-	err   error
-}
-
-func runpipe(i int, p *exec.Cmd, out io.WriteCloser, done chan<- *pipeStatus) {
-	err := p.Run()
-	if out != nil {
-		out.Close()
+func Or(cmds ...*Command) error {
+	for i := range cmds {
+		if err := cmds[i].Run(); err == nil {
+			return nil
+		}
 	}
-	done <- &pipeStatus{i, p, err}
+	return fmt.Errorf("none")
 }
-
-func Pipe(p ...PipeCommand) error {
+func And(cmds ...*Command) error {
+	for i := range cmds {
+		if err := cmds[i].Run(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func Pipe(p ...*Command) error {
 	n := len(p)
 	if n == 0 {
 		return nil
 	}
-
 	cmds := make([]*exec.Cmd, n)
 	for i := range p {
-		cmds[i] = command(p[i].name, p[i].args...)
+		cmds[i] = p[i].Cmd()
 	}
-
-	done := make(chan *pipeStatus, 1)
-	for i := 0; i < n-1; i++ {
-		nextin, out := io.Pipe()
-		cmds[i+1].Stdin, cmds[i].Stdout = nextin, out
-		go runpipe(i, cmds[i], out, done)
-	}
-	go runpipe(n-1, cmds[n-1], nil, done)
-
-	statuses := make([]*pipeStatus, 0, n)
-	for status := range done {
-		statuses = append(statuses, status)
-		if len(statuses) == n {
-			break
-		}
-	}
-	close(done)
-
-	// take on the error of the last process
+	done := pipe(cmds)
 	var err error
-	for _, status := range statuses {
-		if status.index == n-1 {
-			err = status.err
-			break
+	for i := 0; i < n; i++ {
+		if e, ok := (<-done).(errPipeLast); ok {
+			err = e.err
 		}
 	}
-
 	return err
+}
+
+type errPipeLast struct {
+	cmd *exec.Cmd
+	err error
+}
+
+func (err errPipeLast) Error() string {
+	return err.err.Error()
+}
+
+func pipe(cmds []*exec.Cmd) <-chan error {
+	done := make(chan error, 1)
+	for i, curr := range cmds {
+		if i < len(cmds)-1 {
+			in, out := io.Pipe()
+			cmds[i+1].Stdin = in
+			curr.Stdout = out
+			go runpipe(false, curr, out, done)
+		} else {
+			go runpipe(true, curr, nil, done)
+		}
+	}
+	return done
+}
+
+func runpipe(last bool, p *exec.Cmd, out io.WriteCloser, done chan<- error) {
+	err := p.Run()
+	if out != nil {
+		out.Close()
+	}
+	if last {
+		done <- errPipeLast{p, err}
+	} else {
+		done <- err
+	}
 }
 
 func Must(err error) {
 	if err != nil {
-		Log("=> FAIL", "--", err)
+		Println(err)
 		os.Exit(1)
 	}
 }
 
-func Log(v ...interface{}) {
-	fmt.Println(v...)
+func Print(v ...interface{}) {
+	fmt.Fprint(Stdout, v...)
+}
+func Println(v ...interface{}) {
+	fmt.Fprintln(Stdout, v...)
+}
+func Printf(format string, v ...interface{}) {
+	fmt.Fprintf(Stdout, format, v...)
 }
 
-func Getenv(key string, def string) string {
+func Getenv(key, def string) string {
 	val := os.Getenv(key)
 	if val == "" {
 		val = def
 	}
 	return val
+}
+func Setenv(key, value string) {
+	os.Setenv(key, value)
 }
 
 func Path(nodes ...string) string {
