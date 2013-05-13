@@ -11,6 +11,7 @@
 package script
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -35,9 +36,71 @@ func Run(path string, args ...string) error {
 	return Cmd(path, args...).Run()
 }
 
+func Bytes(path string, args ...string) ([]byte, error) {
+	stdout := new(bytes.Buffer)
+	err := Cmd(path, args...).
+		Stdout(stdout).
+		Run()
+	p := stdout.Bytes()
+	return p, err
+}
+
+func String(path string, args ...string) (string, error) {
+	p, err := Bytes(path, args...)
+	return string(p), err
+}
+
+func must(err error) {
+	if err != nil {
+		Println(err)
+		os.Exit(1)
+	}
+}
+
+func Must(path string, args ...string) {
+	must(Run(path, args...))
+}
+
+func MustBytes(path string, args ...string) []byte {
+	p, err := Bytes(path, args...)
+	must(err)
+	return p
+}
+
+func MustString(path string, args ...string) string {
+	return string(MustBytes(path, args...))
+}
+
 type Command struct {
-	Path string
-	Args []string
+	Path   string
+	Args   []string
+	stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
+}
+
+// redirect stderr to stdout
+func (cmd *Command) Combine() *Command {
+	cmd.stderr = cmd.stdout
+	return cmd
+}
+
+// redirect stdout to stderr
+func (cmd *Command) CombineErr() *Command {
+	cmd.stdout = cmd.stderr
+	return cmd
+}
+
+// redirect stdout
+func (cmd *Command) Stdout(out io.Writer) *Command {
+	cmd.stdout = out
+	return cmd
+}
+
+// redirect stderr
+func (cmd *Command) Stderr(err io.Writer) *Command {
+	cmd.stderr = err
+	return cmd
 }
 
 func (cmd *Command) Start() <-chan error {
@@ -59,14 +122,14 @@ func (cmd *Command) Run() error {
 }
 func (cmd *Command) Cmd() *exec.Cmd {
 	_cmd := exec.Command(cmd.Path, cmd.Args...)
-	_cmd.Stdin = Stdin
-	_cmd.Stdout = NopWriteCloser{Stdout}
-	_cmd.Stderr = NopWriteCloser{Stderr}
+	_cmd.Stdin = cmd.stdin
+	_cmd.Stdout = NopWriteCloser{cmd.stdout}
+	_cmd.Stderr = NopWriteCloser{cmd.stderr}
 	_cmd.Env = os.Environ()
 	return _cmd
 }
 func Cmd(path string, args ...string) *Command {
-	return &Command{path, args}
+	return &Command{path, args, Stdin, Stdout, Stderr}
 }
 func Or(cmds ...*Command) error {
 	for i := range cmds {
@@ -136,13 +199,6 @@ func runpipe(last bool, p *exec.Cmd, out io.WriteCloser, done chan<- error) {
 		done <- errPipeLast{p, err}
 	} else {
 		done <- err
-	}
-}
-
-func Must(err error) {
-	if err != nil {
-		Println(err)
-		os.Exit(1)
 	}
 }
 
