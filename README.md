@@ -1,32 +1,14 @@
-[install go]: http://golang.org/install.html "Install Go"
-[gopkgdoc]: http://go.pkgdoc.org/github.com/bmatsuo/script/ "GoPkgDoc"
+[godoc]: http://godoc.org/github.com/bmatsuo/script/ "godoc.org"
 
-About
-=============
+Installation
+============
 
-<no value>
+    go get github.com/bmatsuo/go-script
 
 Documentation
 =============
 
-Prerequisites
--------------
-
-[Install Go][].
-
-Installation
--------------
-
-    go get github.com/bmatsuo/script
-
-General Documentation
----------------------
-
-Use `go doc` to vew the documentation for go-script
-
-    go doc github.com/bmatsuo/script
-
-Or alternatively, check out [GoPkgDoc][]
+Read the docs on [godoc.org][]
 
 Author
 ======
