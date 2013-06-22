@@ -1,4 +1,4 @@
-[godoc.org]: http://godoc.org/github.com/bmatsuo/script/ "godoc.org"
+[godoc.org]: http://godoc.org/github.com/bmatsuo/go-script/ "godoc.org"
 
 Installation
 ============
